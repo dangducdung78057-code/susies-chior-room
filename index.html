@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Susie's Choir Room</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <img src="assets/choir-room.svg" alt="" class="brand-art">
+          <div>
+            <h1>Susie's Choir Room</h1>
+            <p>合唱练习工作台</p>
+          </div>
+        </div>
+        <div class="score-status" id="scoreStatus">未载入曲谱</div>
+      </header>
+
+      <main class="workspace">
+        <section class="panel score-panel" aria-labelledby="scoreHeading">
+          <div class="panel-heading">
+            <h2 id="scoreHeading">曲谱</h2>
+          </div>
+
+          <label class="file-drop" for="scoreInput" id="fileDrop">
+            <span class="file-icon" aria-hidden="true">♪</span>
+            <span>
+              <strong>导入 MusicXML</strong>
+              <small>.musicxml 或 .xml</small>
+            </span>
+          </label>
+          <input id="scoreInput" type="file" accept=".musicxml,.xml,text/xml,application/xml">
+
+          <div class="button-row">
+            <button type="button" class="button primary" id="demoButton">
+              <span aria-hidden="true">▶</span>
+              载入示例
+            </button>
+            <button type="button" class="button ghost" id="clearButton">
+              <span aria-hidden="true">×</span>
+              清空
+            </button>
+          </div>
+
+          <dl class="meta-list" id="scoreMeta">
+            <div>
+              <dt>标题</dt>
+              <dd>等待曲谱</dd>
+            </div>
+            <div>
+              <dt>调号</dt>
+              <dd>--</dd>
+            </div>
+            <div>
+              <dt>拍号</dt>
+              <dd>--</dd>
+            </div>
+            <div>
+              <dt>速度</dt>
+              <dd>--</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="panel player-panel" aria-labelledby="practiceHeading">
+          <div class="panel-heading">
+            <h2 id="practiceHeading">练习</h2>
+          </div>
+
+          <label class="field">
+            <span>声部</span>
+            <select id="partSelect" disabled>
+              <option>先导入曲谱</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>速度</span>
+            <div class="speed-control">
+              <input id="speedSlider" type="range" min="50" max="150" value="100">
+              <output id="speedOutput">100%</output>
+            </div>
+          </label>
+
+          <div class="tempo-readout">
+            当前速度
+            <strong id="currentBpm">-- BPM</strong>
+          </div>
+
+          <div class="transport-grid">
+            <button type="button" class="button primary" id="playPartButton" disabled>
+              <span aria-hidden="true">▶</span>
+              声部
+            </button>
+            <button type="button" class="button primary" id="playAllButton" disabled>
+              <span aria-hidden="true">▶</span>
+              全部
+            </button>
+            <button type="button" class="button accent" id="rhythmButton" disabled>
+              <span aria-hidden="true">●</span>
+              节奏
+            </button>
+            <button type="button" class="button danger" id="stopButton" disabled>
+              <span aria-hidden="true">■</span>
+              停止
+            </button>
+          </div>
+
+          <div class="progress-shell" aria-label="播放进度">
+            <div class="progress-bar" id="progressBar"></div>
+          </div>
+        </section>
+
+        <section class="analysis-panel" aria-labelledby="analysisHeading">
+          <div class="analysis-header">
+            <div>
+              <h2 id="analysisHeading">曲谱分析</h2>
+              <p id="analysisSubtitle">导入曲谱后生成声部、音域和节奏线索。</p>
+            </div>
+            <div class="summary-chips" id="summaryChips"></div>
+          </div>
+
+          <div class="part-grid" id="partGrid">
+            <article class="empty-state">
+              <strong>还没有曲谱</strong>
+              <span>载入示例或导入 MusicXML 后开始分析。</span>
+            </article>
+          </div>
+
+          <div class="insight-strip" id="insightStrip">
+            <div>
+              <strong>分析重点</strong>
+              <span>等待曲谱数据。</span>
+            </div>
+          </div>
+        </section>
+
+        <aside class="panel notes-panel" aria-labelledby="notesHeading">
+          <div class="panel-heading">
+            <h2 id="notesHeading">练习笔记</h2>
+          </div>
+          <textarea id="practiceNotes" rows="10" spellcheck="false" placeholder="记录声部难点、排练提醒、速度目标。"></textarea>
+          <div class="notes-status" id="notesStatus">本地保存</div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
