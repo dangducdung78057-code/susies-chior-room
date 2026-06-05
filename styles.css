@@ -280,6 +280,7 @@ h2 {
 }
 
 select,
+input[type="file"].audio-input,
 textarea {
   width: 100%;
   border: 1px solid var(--line);
@@ -291,6 +292,11 @@ textarea {
 select {
   height: 42px;
   padding: 0 12px;
+}
+
+input[type="file"].audio-input {
+  min-height: 42px;
+  padding: 9px 10px;
 }
 
 .speed-control {
@@ -334,6 +340,15 @@ output,
   height: 100%;
   background: linear-gradient(90deg, var(--green), var(--gold), var(--coral));
   transition: width 80ms linear;
+}
+
+.audio-status {
+  padding: 10px 12px;
+  border-radius: 7px;
+  background: #f7faf9;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
 }
 
 .score-sync-panel {
@@ -423,6 +438,20 @@ output,
 
 .score-empty strong {
   color: var(--ink);
+}
+
+.pdf-preview {
+  min-width: min(1000px, 100%);
+  height: 620px;
+  padding: 12px;
+}
+
+.pdf-preview object {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 6px;
+  background: #ffffff;
 }
 
 .score-sheet {
