@@ -114,6 +114,35 @@
           </div>
         </section>
 
+        <section class="score-sync-panel" aria-labelledby="syncHeading">
+          <div class="sync-header">
+            <div>
+              <h2 id="syncHeading">同步曲谱</h2>
+              <p id="syncSubtitle">导入曲谱后，示范音频和节奏练习会带动高亮光标。</p>
+            </div>
+            <div class="sync-status" id="syncStatus">等待曲谱</div>
+          </div>
+
+          <div class="sync-toolbar" aria-label="同步曲谱设置">
+            <label class="toggle">
+              <input type="checkbox" id="followCursorToggle" checked>
+              <span>跟随光标</span>
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="showAllPartsToggle" checked>
+              <span>显示全部声部</span>
+            </label>
+          </div>
+
+          <div class="score-stage" id="scoreStage">
+            <div class="score-cursor" id="scoreCursor" aria-hidden="true"></div>
+            <div class="score-empty">
+              <strong>还没有同步谱面</strong>
+              <span>载入示例或导入 MusicXML 后可以边听边看高亮跟随。</span>
+            </div>
+          </div>
+        </section>
+
         <section class="analysis-panel" aria-labelledby="analysisHeading">
           <div class="analysis-header">
             <div>
