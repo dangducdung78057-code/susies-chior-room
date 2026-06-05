@@ -28,11 +28,11 @@
           <label class="file-drop" for="scoreInput" id="fileDrop">
             <span class="file-icon" aria-hidden="true">♪</span>
             <span>
-              <strong>导入 MusicXML</strong>
-              <small>.musicxml 或 .xml</small>
+              <strong>导入曲谱</strong>
+              <small>.musicxml / .xml / .mid / .midi / .pdf</small>
             </span>
           </label>
-          <input id="scoreInput" type="file" accept=".musicxml,.xml,text/xml,application/xml">
+          <input id="scoreInput" type="file" accept=".musicxml,.xml,.mid,.midi,.pdf,text/xml,application/xml,application/pdf,audio/midi">
 
           <div class="button-row">
             <button type="button" class="button primary" id="demoButton">
@@ -42,6 +42,10 @@
             <button type="button" class="button ghost" id="clearButton">
               <span aria-hidden="true">×</span>
               清空
+            </button>
+            <button type="button" class="button ghost" id="exportMidiButton" disabled>
+              <span aria-hidden="true">↓</span>
+              导出 MIDI
             </button>
           </div>
 
@@ -103,6 +107,10 @@
               <span aria-hidden="true">●</span>
               节奏
             </button>
+            <button type="button" class="button accent" id="playAudioButton" disabled>
+              <span aria-hidden="true">▶</span>
+              音频
+            </button>
             <button type="button" class="button danger" id="stopButton" disabled>
               <span aria-hidden="true">■</span>
               停止
@@ -112,6 +120,12 @@
           <div class="progress-shell" aria-label="播放进度">
             <div class="progress-bar" id="progressBar"></div>
           </div>
+
+          <label class="field">
+            <span>示范音频</span>
+            <input id="demoAudioInput" class="audio-input" type="file" accept="audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/mp4" disabled>
+          </label>
+          <div class="audio-status" id="audioStatus">先导入 MusicXML 或 MIDI，再给当前声部绑定 MP3/WAV。</div>
         </section>
 
         <section class="score-sync-panel" aria-labelledby="syncHeading">
