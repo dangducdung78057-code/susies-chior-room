@@ -1388,16 +1388,17 @@ async function play(mode) {
   const startAt = context.currentTime + 0.08;
   const durationSeconds = state.score.totalQuarters * quarterSeconds;
   const selectedPart = getSelectedPart();
+  const playbackTone = selectPlaybackTone(mode, selectedPart);
 
   if (mode === "part") {
-    schedulePart(context, master, selectedPart.events, startAt, quarterSeconds, 0.34, "choir");
+    schedulePart(context, master, selectedPart.events, startAt, quarterSeconds, 0.34, playbackTone);
   }
 
   if (mode === "all") {
     state.score.parts.forEach((part, index) => {
       const pan = state.score.parts.length === 1 ? 0 : -0.75 + (index * 1.5) / (state.score.parts.length - 1);
       const destination = createPanNode(context, master, pan);
-      schedulePart(context, destination, part.events, startAt, quarterSeconds, 0.18, "choir");
+      schedulePart(context, destination, part.events, startAt, quarterSeconds, 0.18, playbackTone);
     });
   }
 
@@ -1416,6 +1417,18 @@ async function play(mode) {
   updateScoreCursor(0);
   state.playbackTimer = window.setInterval(updateProgress, 80);
   state.playbackEndTimer = window.setTimeout(() => stopPlayback(), (durationSeconds + 0.5) * 1000);
+}
+
+function selectPlaybackTone(mode, selectedPart) {
+  const eventCount =
+    mode === "all"
+      ? state.score.parts.reduce((sum, part) => sum + countPlayableEvents(part.events), 0)
+      : countPlayableEvents(selectedPart.events);
+  return eventCount > 900 ? "triangle" : "choir";
+}
+
+function countPlayableEvents(events) {
+  return events.filter((event) => !event.isRest && event.pitch && event.duration > 0).length;
 }
 
 function schedulePart(context, destination, events, startAt, quarterSeconds, level, type) {
@@ -1462,11 +1475,17 @@ function scheduleChoirTone(context, destination, frequency, start, length, level
   const lowFormant = context.createBiquadFilter();
   const highFormant = context.createBiquadFilter();
   const air = context.createBiquadFilter();
+  const end = start + length;
+  const attackEnd = start + Math.max(0.006, Math.min(0.055, length * 0.32));
+  const releaseDuration = Math.max(0.012, Math.min(0.11, length * 0.35));
+  const releaseStart = Math.min(end - 0.006, Math.max(attackEnd + 0.006, end - releaseDuration));
 
   envelope.gain.setValueAtTime(0.0001, start);
-  envelope.gain.exponentialRampToValueAtTime(level * 0.72, start + 0.055);
-  envelope.gain.setValueAtTime(level * 0.62, start + Math.max(0.08, length - 0.11));
-  envelope.gain.exponentialRampToValueAtTime(0.0001, start + length);
+  envelope.gain.exponentialRampToValueAtTime(level * 0.72, attackEnd);
+  if (releaseStart > attackEnd) {
+    envelope.gain.setValueAtTime(level * 0.62, releaseStart);
+  }
+  envelope.gain.exponentialRampToValueAtTime(0.0001, end);
 
   warmth.gain.value = 0.52;
   lowFormant.type = "bandpass";
@@ -1489,7 +1508,7 @@ function scheduleChoirTone(context, destination, frequency, start, length, level
     oscillator.connect(voiceGain);
     voiceGain.connect(warmth);
     oscillator.start(start);
-    oscillator.stop(start + length + 0.08);
+    oscillator.stop(end + 0.08);
     state.nodes.push(oscillator, voiceGain);
   });
 
@@ -1763,6 +1782,13 @@ function getAudioDuration(audio) {
   });
 }
 
+function handlePlaybackError(error) {
+  stopPlayback();
+  const message = error?.message || "播放失败。";
+  els.scoreStatus.textContent = message;
+  els.syncStatus.textContent = "播放失败";
+}
+
 function loadNotes() {
   els.practiceNotes.value = localStorage.getItem("susies-choir-room-notes") || "";
 }
@@ -1856,10 +1882,10 @@ els.scoreStage.addEventListener("click", (event) => {
   }
   els.syncStatus.textContent = `${part.name} 已选中`;
 });
-els.playPartButton.addEventListener("click", () => play("part"));
-els.playAllButton.addEventListener("click", () => play("all"));
-els.rhythmButton.addEventListener("click", () => play("rhythm"));
-els.playAudioButton.addEventListener("click", playBoundAudio);
+els.playPartButton.addEventListener("click", () => play("part").catch(handlePlaybackError));
+els.playAllButton.addEventListener("click", () => play("all").catch(handlePlaybackError));
+els.rhythmButton.addEventListener("click", () => play("rhythm").catch(handlePlaybackError));
+els.playAudioButton.addEventListener("click", () => playBoundAudio().catch(handlePlaybackError));
 els.stopButton.addEventListener("click", () => stopPlayback());
 els.demoAudioInput.addEventListener("change", (event) => {
   const file = event.target.files?.[0];
