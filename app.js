@@ -1,5 +1,9 @@
 const state = {
   score: null,
+  pdfUrl: null,
+  pdfName: "",
+  audioByPart: {},
+  mediaAudio: null,
   audioContext: null,
   nodes: [],
   playbackTimer: null,
@@ -16,6 +20,7 @@ const els = {
   fileDrop: document.querySelector("#fileDrop"),
   demoButton: document.querySelector("#demoButton"),
   clearButton: document.querySelector("#clearButton"),
+  exportMidiButton: document.querySelector("#exportMidiButton"),
   scoreStatus: document.querySelector("#scoreStatus"),
   scoreMeta: document.querySelector("#scoreMeta"),
   partSelect: document.querySelector("#partSelect"),
@@ -25,7 +30,10 @@ const els = {
   playPartButton: document.querySelector("#playPartButton"),
   playAllButton: document.querySelector("#playAllButton"),
   rhythmButton: document.querySelector("#rhythmButton"),
+  playAudioButton: document.querySelector("#playAudioButton"),
   stopButton: document.querySelector("#stopButton"),
+  demoAudioInput: document.querySelector("#demoAudioInput"),
+  audioStatus: document.querySelector("#audioStatus"),
   progressBar: document.querySelector("#progressBar"),
   syncSubtitle: document.querySelector("#syncSubtitle"),
   syncStatus: document.querySelector("#syncStatus"),
@@ -293,6 +301,446 @@ function parseScore(xmlText) {
   return score;
 }
 
+function parseMidiFile(buffer, fileName = "MIDI score") {
+  const reader = createMidiReader(buffer);
+  if (reader.readText(4) !== "MThd") {
+    throw new Error("这个 MIDI 文件无法读取。");
+  }
+
+  const headerLength = reader.readUint32();
+  const format = reader.readUint16();
+  const trackCount = reader.readUint16();
+  const division = reader.readUint16();
+  if (division & 0x8000) {
+    throw new Error("暂时不支持 SMPTE 时间码 MIDI。");
+  }
+  reader.skip(headerLength - 6);
+
+  const meta = {
+    tempo: 88,
+    timeSignature: { beats: 4, beatType: 4, label: "4/4" },
+    key: null,
+  };
+  const parsedTracks = [];
+
+  for (let index = 0; index < trackCount; index += 1) {
+    const chunk = reader.readText(4);
+    const length = reader.readUint32();
+    const end = reader.position + length;
+    if (chunk !== "MTrk") {
+      reader.position = end;
+      continue;
+    }
+    parsedTracks.push(parseMidiTrack(reader, end, division, meta, index));
+  }
+
+  const noteTracks = buildMidiParts(parsedTracks, division, meta, format);
+  if (!noteTracks.length) {
+    throw new Error("MIDI 里没有找到可播放音符。");
+  }
+
+  const totalQuarters = Math.max(...noteTracks.map((part) => part.totalQuarters), 0);
+  const measureLength = meta.timeSignature.beats * (4 / meta.timeSignature.beatType);
+  const measureCount = Math.max(1, Math.ceil(totalQuarters / measureLength));
+
+  return {
+    title: fileName.replace(/\.(mid|midi)$/i, ""),
+    composer: "",
+    parts: noteTracks.map((part) => ({
+      ...part,
+      key: meta.key,
+      timeSignature: meta.timeSignature,
+      tempo: meta.tempo,
+      measureCount,
+      measureSpans: buildMeasureSpans(measureCount, measureLength),
+      analysis: analyzePart(part, totalQuarters),
+    })),
+    key: meta.key,
+    timeSignature: meta.timeSignature,
+    baseTempo: meta.tempo,
+    totalQuarters,
+    measureCount,
+  };
+}
+
+function createMidiReader(buffer) {
+  const view = new DataView(buffer);
+  return {
+    view,
+    position: 0,
+    readUint8() {
+      const value = view.getUint8(this.position);
+      this.position += 1;
+      return value;
+    },
+    readUint16() {
+      const value = view.getUint16(this.position);
+      this.position += 2;
+      return value;
+    },
+    readUint32() {
+      const value = view.getUint32(this.position);
+      this.position += 4;
+      return value;
+    },
+    readBytes(length) {
+      const bytes = new Uint8Array(buffer, this.position, length);
+      this.position += length;
+      return bytes;
+    },
+    readText(length) {
+      return Array.from(this.readBytes(length))
+        .map((byte) => String.fromCharCode(byte))
+        .join("");
+    },
+    readVarLen() {
+      let value = 0;
+      let byte = 0;
+      do {
+        byte = this.readUint8();
+        value = (value << 7) + (byte & 0x7f);
+      } while (byte & 0x80);
+      return value;
+    },
+    skip(length) {
+      this.position += Math.max(0, length);
+    },
+  };
+}
+
+function parseMidiTrack(reader, end, division, meta, trackIndex) {
+  const decoder = new TextDecoder("utf-8");
+  const notes = [];
+  const openNotes = new Map();
+  let tick = 0;
+  let runningStatus = null;
+  let trackName = "";
+
+  while (reader.position < end) {
+    tick += reader.readVarLen();
+    let status = reader.readUint8();
+
+    if (status < 0x80) {
+      reader.position -= 1;
+      status = runningStatus;
+    } else if (status < 0xf0) {
+      runningStatus = status;
+    }
+
+    if (status === 0xff) {
+      const type = reader.readUint8();
+      const length = reader.readVarLen();
+      const data = reader.readBytes(length);
+      if (type === 0x03 || (!trackName && type === 0x01)) {
+        trackName = decoder.decode(data).trim();
+      }
+      if (type === 0x51 && data.length === 3) {
+        const microseconds = (data[0] << 16) | (data[1] << 8) | data[2];
+        meta.tempo = Math.round(60000000 / microseconds);
+      }
+      if (type === 0x58 && data.length >= 2) {
+        const beats = data[0];
+        const beatType = Math.pow(2, data[1]);
+        meta.timeSignature = { beats, beatType, label: `${beats}/${beatType}` };
+      }
+      if (type === 0x59 && data.length >= 2) {
+        const fifths = data[0] > 127 ? data[0] - 256 : data[0];
+        const mode = data[1] ? "minor" : "major";
+        const map = mode === "minor" ? FIFTHS_MINOR : FIFTHS_MAJOR;
+        meta.key = { fifths, mode, label: map[String(fifths)] || `${fifths} fifths` };
+      }
+      if (type === 0x2f) break;
+      continue;
+    }
+
+    if (status === 0xf0 || status === 0xf7) {
+      reader.skip(reader.readVarLen());
+      continue;
+    }
+
+    const command = status & 0xf0;
+    const channel = status & 0x0f;
+    const first = reader.readUint8();
+    const hasSecond = ![0xc0, 0xd0].includes(command);
+    const second = hasSecond ? reader.readUint8() : 0;
+
+    if (command === 0x90 && second > 0) {
+      const key = `${channel}:${first}`;
+      const stack = openNotes.get(key) || [];
+      stack.push({ tick, velocity: second, channel });
+      openNotes.set(key, stack);
+    }
+
+    if (command === 0x80 || (command === 0x90 && second === 0)) {
+      const key = `${channel}:${first}`;
+      const stack = openNotes.get(key) || [];
+      const started = stack.pop();
+      if (started && tick > started.tick) {
+        notes.push({
+          channel,
+          midi: first,
+          velocity: started.velocity,
+          startTick: started.tick,
+          endTick: tick,
+          trackIndex,
+          trackName,
+        });
+      }
+      if (stack.length) openNotes.set(key, stack);
+      else openNotes.delete(key);
+    }
+  }
+
+  reader.position = end;
+  return {
+    index: trackIndex,
+    name: trackName || `Track ${trackIndex + 1}`,
+    notes,
+  };
+}
+
+function buildMidiParts(tracks, division, meta, format) {
+  const tracksWithNotes = tracks.filter((track) => track.notes.length);
+  const shouldSplitByChannel = format === 0 || tracksWithNotes.length === 1;
+  const groups = [];
+
+  if (shouldSplitByChannel) {
+    const byChannel = new Map();
+    tracksWithNotes.flatMap((track) => track.notes).forEach((note) => {
+      const key = note.channel;
+      if (!byChannel.has(key)) byChannel.set(key, []);
+      byChannel.get(key).push(note);
+    });
+    Array.from(byChannel.entries()).forEach(([channel, notes]) => {
+      groups.push({
+        name: channelName(channel),
+        notes,
+      });
+    });
+  } else {
+    tracksWithNotes.forEach((track) => {
+      groups.push({
+        name: track.name,
+        notes: track.notes,
+      });
+    });
+  }
+
+  const measureLength = meta.timeSignature.beats * (4 / meta.timeSignature.beatType);
+  return groups.map((group, index) => {
+    const events = group.notes
+      .sort((a, b) => a.startTick - b.startTick || a.midi - b.midi)
+      .map((note) => {
+        const start = note.startTick / division;
+        const duration = (note.endTick - note.startTick) / division;
+        const pitch = pitchFromMidi(note.midi);
+        return {
+          start,
+          duration,
+          end: start + duration,
+          measure: String(Math.floor(start / measureLength) + 1),
+          isRest: false,
+          isChord: false,
+          pitch,
+          lyric: "",
+        };
+      });
+    const totalQuarters = Math.max(...events.map((event) => event.end), 0);
+    return {
+      id: `P${index + 1}`,
+      name: group.name || `MIDI Part ${index + 1}`,
+      abbreviation: "",
+      events,
+      totalQuarters,
+      measureCount: Math.max(1, Math.ceil(totalQuarters / measureLength)),
+    };
+  });
+}
+
+function channelName(channel) {
+  const names = ["Soprano", "Alto", "Tenor", "Bass"];
+  return names[channel] || `MIDI Channel ${channel + 1}`;
+}
+
+function pitchFromMidi(midi) {
+  return {
+    step: midiToStep(midi),
+    alter: 0,
+    octave: Math.floor(midi / 12) - 1,
+    midi,
+    label: midiToLabel(midi),
+    frequency: 440 * Math.pow(2, (midi - 69) / 12),
+  };
+}
+
+function midiToStep(midi) {
+  return ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"][midi % 12];
+}
+
+function buildMeasureSpans(count, measureLength) {
+  return Array.from({ length: count }, (_, index) => ({
+    number: String(index + 1),
+    start: index * measureLength,
+    end: (index + 1) * measureLength,
+    duration: measureLength,
+  }));
+}
+
+function exportScoreAsMidi() {
+  if (!state.score) return;
+  const bytes = buildMidiFile(state.score);
+  const blob = new Blob([new Uint8Array(bytes)], { type: "audio/midi" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${slugify(state.score.title || "choir-score")}.mid`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  els.scoreStatus.textContent = "MIDI 已导出";
+}
+
+function buildMidiFile(score) {
+  const division = 480;
+  const tracks = [buildConductorTrack(score, division), ...score.parts.map((part, index) => buildPartTrack(part, index, division))];
+  return [
+    ...asciiBytes("MThd"),
+    ...uint32Bytes(6),
+    ...uint16Bytes(1),
+    ...uint16Bytes(tracks.length),
+    ...uint16Bytes(division),
+    ...tracks.flat(),
+  ];
+}
+
+function buildConductorTrack(score) {
+  const bpm = score.baseTempo || 88;
+  const microseconds = Math.round(60000000 / bpm);
+  const beats = score.timeSignature?.beats || 4;
+  const beatType = score.timeSignature?.beatType || 4;
+  const denominatorPower = Math.round(Math.log2(beatType));
+  const fifths = score.key?.fifths || 0;
+  const mode = score.key?.mode === "minor" ? 1 : 0;
+  const events = [
+    ...varLenBytes(0),
+    0xff,
+    0x03,
+    ...varLenBytes(score.title.length),
+    ...utf8Bytes(score.title || "Choir score"),
+    ...varLenBytes(0),
+    0xff,
+    0x51,
+    0x03,
+    (microseconds >> 16) & 0xff,
+    (microseconds >> 8) & 0xff,
+    microseconds & 0xff,
+    ...varLenBytes(0),
+    0xff,
+    0x58,
+    0x04,
+    beats,
+    denominatorPower,
+    24,
+    8,
+    ...varLenBytes(0),
+    0xff,
+    0x59,
+    0x02,
+    fifths < 0 ? 256 + fifths : fifths,
+    mode,
+    ...varLenBytes(0),
+    0xff,
+    0x2f,
+    0x00,
+  ];
+  return midiTrackChunk(events);
+}
+
+function buildPartTrack(part, index, division) {
+  const channel = midiChannelForPart(index);
+  const timedEvents = [];
+  part.events
+    .filter((event) => !event.isRest && event.pitch && event.duration > 0)
+    .forEach((event) => {
+      const startTick = Math.max(0, Math.round(event.start * division));
+      const endTick = Math.max(startTick + 1, Math.round(event.end * division));
+      timedEvents.push({ tick: startTick, order: 1, bytes: [0x90 | channel, event.pitch.midi, 88] });
+      timedEvents.push({ tick: endTick, order: 0, bytes: [0x80 | channel, event.pitch.midi, 0] });
+    });
+
+  timedEvents.sort((a, b) => a.tick - b.tick || a.order - b.order);
+
+  const events = [
+    ...varLenBytes(0),
+    0xff,
+    0x03,
+    ...varLenBytes(part.name.length),
+    ...utf8Bytes(part.name),
+    ...varLenBytes(0),
+    0xc0 | channel,
+    52,
+  ];
+
+  let lastTick = 0;
+  timedEvents.forEach((event) => {
+    events.push(...varLenBytes(event.tick - lastTick), ...event.bytes);
+    lastTick = event.tick;
+  });
+  events.push(...varLenBytes(0), 0xff, 0x2f, 0x00);
+
+  return midiTrackChunk(events);
+}
+
+function midiChannelForPart(index) {
+  const channel = index % 15;
+  return channel >= 9 ? channel + 1 : channel;
+}
+
+function midiTrackChunk(events) {
+  return [...asciiBytes("MTrk"), ...uint32Bytes(events.length), ...events];
+}
+
+function asciiBytes(value) {
+  return Array.from(value).map((char) => char.charCodeAt(0));
+}
+
+function utf8Bytes(value) {
+  return Array.from(new TextEncoder().encode(value || ""));
+}
+
+function uint16Bytes(value) {
+  return [(value >> 8) & 0xff, value & 0xff];
+}
+
+function uint32Bytes(value) {
+  return [(value >> 24) & 0xff, (value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff];
+}
+
+function varLenBytes(value) {
+  let buffer = value & 0x7f;
+  const bytes = [];
+  while ((value >>= 7)) {
+    buffer <<= 8;
+    buffer |= (value & 0x7f) | 0x80;
+  }
+  while (true) {
+    bytes.push(buffer & 0xff);
+    if (buffer & 0x80) buffer >>= 8;
+    else break;
+  }
+  return bytes;
+}
+
+function slugify(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    || "choir-score";
+}
+
 function parsePart(partElement, definition = {}) {
   let divisions = 1;
   let currentQuarter = 0;
@@ -528,6 +976,9 @@ function render() {
   els.playPartButton.disabled = !hasScore;
   els.playAllButton.disabled = !hasScore;
   els.rhythmButton.disabled = !hasScore;
+  els.playAudioButton.disabled = !hasScore || !hasCurrentPartAudio();
+  els.exportMidiButton.disabled = !hasScore;
+  els.demoAudioInput.disabled = !hasScore;
   els.stopButton.disabled = true;
 
   if (hasScore) {
@@ -543,6 +994,7 @@ function render() {
   }
 
   renderScoreStage(score);
+  updateAudioStatus();
   updateTempoReadout();
 }
 
@@ -652,6 +1104,17 @@ function renderEmptyInsights() {
 
 function renderScoreStage(score) {
   if (!score) {
+    if (state.pdfUrl) {
+      els.scoreStage.innerHTML = `
+        <div class="pdf-preview">
+          <object data="${state.pdfUrl}" type="application/pdf">
+            <a href="${state.pdfUrl}" target="_blank" rel="noreferrer">打开 PDF 曲谱</a>
+          </object>
+        </div>
+      `;
+      return;
+    }
+
     els.scoreStage.innerHTML = `
       <div class="score-cursor" id="scoreCursor" aria-hidden="true"></div>
       <div class="score-empty">
@@ -855,6 +1318,8 @@ function getCurrentBpm() {
 async function loadXml(xmlText, label = "") {
   stopPlayback();
   try {
+    clearPdfPreview();
+    clearBoundAudio();
     state.score = parseScore(xmlText);
     render();
     els.scoreStatus.textContent = label ? `已载入 ${label}` : "曲谱已载入";
@@ -863,6 +1328,39 @@ async function loadXml(xmlText, label = "") {
     render();
     els.scoreStatus.textContent = error.message;
   }
+}
+
+async function loadMidi(arrayBuffer, label = "") {
+  stopPlayback();
+  try {
+    clearPdfPreview();
+    clearBoundAudio();
+    state.score = parseMidiFile(arrayBuffer, label || "MIDI score");
+    render();
+    els.scoreStatus.textContent = label ? `已载入 ${label}` : "MIDI 已载入";
+  } catch (error) {
+    state.score = null;
+    render();
+    els.scoreStatus.textContent = error.message;
+  }
+}
+
+function loadPdf(file) {
+  stopPlayback();
+  clearPdfPreview();
+  clearBoundAudio();
+  state.score = null;
+  state.pdfUrl = URL.createObjectURL(file);
+  state.pdfName = file.name;
+  render();
+  els.scoreStatus.textContent = `PDF 已载入：${file.name}`;
+  els.syncStatus.textContent = "PDF 仅显示";
+}
+
+function clearPdfPreview() {
+  if (state.pdfUrl) URL.revokeObjectURL(state.pdfUrl);
+  state.pdfUrl = null;
+  state.pdfName = "";
 }
 
 async function ensureAudioContext() {
@@ -1002,6 +1500,12 @@ function stopPlayback(resetProgress = true) {
     state.playbackEndTimer = null;
   }
 
+  if (state.mediaAudio) {
+    state.mediaAudio.pause();
+    state.mediaAudio.currentTime = 0;
+    state.mediaAudio = null;
+  }
+
   state.nodes.forEach((node) => {
     try {
       if (typeof node.stop === "function") node.stop();
@@ -1025,8 +1529,13 @@ function stopPlayback(resetProgress = true) {
 }
 
 function updateProgress() {
-  if (!state.audioContext || !state.playbackSeconds) return;
-  const elapsed = state.audioContext.currentTime - state.playbackStartedAt;
+  if (!state.playbackSeconds) return;
+  const elapsed =
+    state.playbackMode === "audio" && state.mediaAudio
+      ? state.mediaAudio.currentTime
+      : state.audioContext
+        ? state.audioContext.currentTime - state.playbackStartedAt
+        : 0;
   const progress = clamp((elapsed / state.playbackSeconds) * 100, 0, 100);
   els.progressBar.style.width = `${progress}%`;
   updateScoreCursor(elapsed);
@@ -1038,6 +1547,7 @@ function updateSyncStatusForPlayback(mode, part) {
     part: `${part.name} 声部示范同步中`,
     all: "全声部示范同步中",
     rhythm: `${part.name} 节奏示范同步中`,
+    audio: `${part.name} 示范音频同步中`,
   };
   els.syncStatus.textContent = labels[mode] || "同步中";
 }
@@ -1121,6 +1631,87 @@ function getSelectedPart() {
   return state.score.parts.find((part) => part.id === selected) || state.score.parts[0];
 }
 
+function hasCurrentPartAudio() {
+  if (!state.score) return false;
+  const part = getSelectedPart();
+  return Boolean(state.audioByPart[part.id]);
+}
+
+function bindDemoAudio(file) {
+  if (!state.score || !file) return;
+  const part = getSelectedPart();
+  const existing = state.audioByPart[part.id];
+  if (existing?.url) URL.revokeObjectURL(existing.url);
+
+  state.audioByPart[part.id] = {
+    fileName: file.name,
+    url: URL.createObjectURL(file),
+    type: file.type,
+  };
+  updateAudioStatus();
+  els.playAudioButton.disabled = false;
+}
+
+function clearBoundAudio() {
+  Object.values(state.audioByPart).forEach((audio) => {
+    if (audio.url) URL.revokeObjectURL(audio.url);
+  });
+  state.audioByPart = {};
+  state.mediaAudio = null;
+  updateAudioStatus();
+}
+
+function updateAudioStatus() {
+  if (!state.score) {
+    els.audioStatus.textContent = "先导入 MusicXML 或 MIDI，再给当前声部绑定 MP3/WAV。";
+    els.playAudioButton.disabled = true;
+    return;
+  }
+  const part = getSelectedPart();
+  const audio = state.audioByPart[part.id];
+  els.audioStatus.textContent = audio
+    ? `${part.name} 已绑定：${audio.fileName}`
+    : `${part.name} 还没有绑定示范音频。`;
+  els.playAudioButton.disabled = !audio;
+}
+
+async function playBoundAudio() {
+  if (!state.score || !hasCurrentPartAudio()) return;
+  stopPlayback(false);
+
+  const part = getSelectedPart();
+  const audioInfo = state.audioByPart[part.id];
+  const audio = new Audio(audioInfo.url);
+  audio.playbackRate = Number(els.speedSlider.value) / 100;
+  state.mediaAudio = audio;
+  state.playbackMode = "audio";
+  state.playbackPartId = part.id;
+  state.playbackSeconds = await getAudioDuration(audio);
+  state.playbackQuarterSeconds = state.playbackSeconds / Math.max(1, state.score.totalQuarters);
+
+  updateSyncStatusForPlayback("audio", part);
+  updateScoreCursor(0);
+  els.stopButton.disabled = false;
+  state.playbackTimer = window.setInterval(updateProgress, 80);
+  audio.addEventListener("ended", () => stopPlayback(false), { once: true });
+  await audio.play();
+}
+
+function getAudioDuration(audio) {
+  return new Promise((resolve, reject) => {
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+      resolve(audio.duration);
+      return;
+    }
+    audio.addEventListener(
+      "loadedmetadata",
+      () => resolve(Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : state.score.totalQuarters),
+      { once: true },
+    );
+    audio.addEventListener("error", () => reject(new Error("示范音频无法播放。")), { once: true });
+  });
+}
+
 function loadNotes() {
   els.practiceNotes.value = localStorage.getItem("susies-choir-room-notes") || "";
 }
@@ -1136,7 +1727,7 @@ function saveNotes() {
 els.scoreInput.addEventListener("change", async (event) => {
   const file = event.target.files?.[0];
   if (!file) return;
-  await loadXml(await file.text(), file.name);
+  await loadScoreFile(file);
   event.target.value = "";
 });
 
@@ -1157,20 +1748,37 @@ els.scoreInput.addEventListener("change", async (event) => {
 els.fileDrop.addEventListener("drop", async (event) => {
   const file = event.dataTransfer?.files?.[0];
   if (!file) return;
-  await loadXml(await file.text(), file.name);
+  await loadScoreFile(file);
 });
+
+async function loadScoreFile(file) {
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".pdf") || file.type === "application/pdf") {
+    loadPdf(file);
+    return;
+  }
+  if (name.endsWith(".mid") || name.endsWith(".midi") || file.type.includes("midi")) {
+    await loadMidi(await file.arrayBuffer(), file.name);
+    return;
+  }
+  await loadXml(await file.text(), file.name);
+}
 
 els.demoButton.addEventListener("click", () => loadXml(DEMO_MUSICXML, "示例曲谱"));
 els.clearButton.addEventListener("click", () => {
   stopPlayback();
   state.score = null;
+  clearPdfPreview();
+  clearBoundAudio();
   render();
 });
+els.exportMidiButton.addEventListener("click", exportScoreAsMidi);
 
 els.speedSlider.addEventListener("input", updateTempoReadout);
 els.partSelect.addEventListener("change", () => {
   stopPlayback();
   renderScoreStage(state.score);
+  updateAudioStatus();
   if (state.score) {
     els.syncStatus.textContent = `${getSelectedPart().name} 已选中`;
   }
@@ -1200,7 +1808,13 @@ els.scoreStage.addEventListener("click", (event) => {
 els.playPartButton.addEventListener("click", () => play("part"));
 els.playAllButton.addEventListener("click", () => play("all"));
 els.rhythmButton.addEventListener("click", () => play("rhythm"));
+els.playAudioButton.addEventListener("click", playBoundAudio);
 els.stopButton.addEventListener("click", () => stopPlayback());
+els.demoAudioInput.addEventListener("change", (event) => {
+  const file = event.target.files?.[0];
+  bindDemoAudio(file);
+  event.target.value = "";
+});
 els.practiceNotes.addEventListener("input", saveNotes);
 
 loadNotes();
