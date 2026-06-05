@@ -1390,14 +1390,14 @@ async function play(mode) {
   const selectedPart = getSelectedPart();
 
   if (mode === "part") {
-    schedulePart(context, master, selectedPart.events, startAt, quarterSeconds, 0.34, "triangle");
+    schedulePart(context, master, selectedPart.events, startAt, quarterSeconds, 0.34, "choir");
   }
 
   if (mode === "all") {
     state.score.parts.forEach((part, index) => {
       const pan = state.score.parts.length === 1 ? 0 : -0.75 + (index * 1.5) / (state.score.parts.length - 1);
       const destination = createPanNode(context, master, pan);
-      schedulePart(context, destination, part.events, startAt, quarterSeconds, 0.18, index % 2 ? "sine" : "triangle");
+      schedulePart(context, destination, part.events, startAt, quarterSeconds, 0.18, "choir");
     });
   }
 
@@ -1424,11 +1424,16 @@ function schedulePart(context, destination, events, startAt, quarterSeconds, lev
     .forEach((event) => {
       const start = startAt + event.start * quarterSeconds;
       const length = Math.max(0.05, event.duration * quarterSeconds * 0.92);
-      scheduleTone(context, destination, event.pitch.frequency, start, length, level, type);
+      scheduleTone(context, destination, event.pitch.frequency, start, length, level, type || "choir");
     });
 }
 
 function scheduleTone(context, destination, frequency, start, length, level, type = "triangle") {
+  if (type === "choir") {
+    scheduleChoirTone(context, destination, frequency, start, length, level);
+    return;
+  }
+
   const oscillator = context.createOscillator();
   const gain = context.createGain();
   const filter = context.createBiquadFilter();
@@ -1449,6 +1454,52 @@ function scheduleTone(context, destination, frequency, start, length, level, typ
   oscillator.start(start);
   oscillator.stop(start + length + 0.03);
   state.nodes.push(oscillator, gain, filter);
+}
+
+function scheduleChoirTone(context, destination, frequency, start, length, level) {
+  const envelope = context.createGain();
+  const warmth = context.createGain();
+  const lowFormant = context.createBiquadFilter();
+  const highFormant = context.createBiquadFilter();
+  const air = context.createBiquadFilter();
+
+  envelope.gain.setValueAtTime(0.0001, start);
+  envelope.gain.exponentialRampToValueAtTime(level * 0.72, start + 0.055);
+  envelope.gain.setValueAtTime(level * 0.62, start + Math.max(0.08, length - 0.11));
+  envelope.gain.exponentialRampToValueAtTime(0.0001, start + length);
+
+  warmth.gain.value = 0.52;
+  lowFormant.type = "bandpass";
+  lowFormant.frequency.setValueAtTime(720, start);
+  lowFormant.Q.value = 5.8;
+  highFormant.type = "bandpass";
+  highFormant.frequency.setValueAtTime(1180, start);
+  highFormant.Q.value = 4.2;
+  air.type = "lowpass";
+  air.frequency.setValueAtTime(2800, start);
+
+  const detunes = [-8, -2, 5, 11];
+  detunes.forEach((detune, index) => {
+    const oscillator = context.createOscillator();
+    const voiceGain = context.createGain();
+    oscillator.type = index === 0 ? "triangle" : "sine";
+    oscillator.frequency.setValueAtTime(frequency, start);
+    oscillator.detune.setValueAtTime(detune, start);
+    voiceGain.gain.value = index === 0 ? 0.72 : 0.36;
+    oscillator.connect(voiceGain);
+    voiceGain.connect(warmth);
+    oscillator.start(start);
+    oscillator.stop(start + length + 0.08);
+    state.nodes.push(oscillator, voiceGain);
+  });
+
+  warmth.connect(lowFormant);
+  warmth.connect(highFormant);
+  lowFormant.connect(air);
+  highFormant.connect(air);
+  air.connect(envelope);
+  envelope.connect(destination);
+  state.nodes.push(envelope, warmth, lowFormant, highFormant, air);
 }
 
 function scheduleMetronome(context, destination, startAt, quarterSeconds, score) {
