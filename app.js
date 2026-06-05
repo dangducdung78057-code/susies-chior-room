@@ -61,6 +61,8 @@ const NOTE_CLASS = {
 
 const SYNC_LABEL_WIDTH = 128;
 const SYNC_LANE_HEIGHT = 104;
+const MAX_RENDERED_EVENTS_PER_PART = 700;
+const MAX_RENDERED_EVENTS_TOTAL = 2200;
 
 const FIFTHS_MAJOR = {
   "-7": "Cb major",
@@ -302,7 +304,7 @@ function parseScore(xmlText) {
 }
 
 function parseMidiFile(buffer, fileName = "MIDI score") {
-  const reader = createMidiReader(buffer);
+  const reader = createMidiReader(prepareMidiBuffer(buffer));
   if (reader.readText(4) !== "MThd") {
     throw new Error("这个 MIDI 文件无法读取。");
   }
@@ -346,6 +348,7 @@ function parseMidiFile(buffer, fileName = "MIDI score") {
   return {
     title: fileName.replace(/\.(mid|midi)$/i, ""),
     composer: "",
+    sourceType: "midi",
     parts: noteTracks.map((part) => ({
       ...part,
       key: meta.key,
@@ -359,8 +362,51 @@ function parseMidiFile(buffer, fileName = "MIDI score") {
     timeSignature: meta.timeSignature,
     baseTempo: meta.tempo,
     totalQuarters,
+    totalPlayableEvents: noteTracks.reduce((sum, part) => sum + part.events.length, 0),
     measureCount,
   };
+}
+
+function prepareMidiBuffer(buffer) {
+  const bytes = new Uint8Array(buffer);
+  if (bytes.length < 14) {
+    throw new Error("MIDI 文件太小，无法读取。");
+  }
+
+  const startsWith = (offset, textValue) =>
+    Array.from(textValue).every((char, index) => bytes[offset + index] === char.charCodeAt(0));
+
+  if (startsWith(0, "MThd")) {
+    return buffer;
+  }
+
+  if (startsWith(0, "RIFF")) {
+    const mthdOffset = findMidiHeaderOffset(bytes);
+    if (mthdOffset >= 0) {
+      return bytes.slice(mthdOffset).buffer;
+    }
+  }
+
+  const fallbackOffset = findMidiHeaderOffset(bytes);
+  if (fallbackOffset > 0) {
+    return bytes.slice(fallbackOffset).buffer;
+  }
+
+  throw new Error("这个文件不是标准 MIDI，或需要先导出为 .mid/.midi。");
+}
+
+function findMidiHeaderOffset(bytes) {
+  for (let index = 0; index <= bytes.length - 4; index += 1) {
+    if (
+      bytes[index] === 0x4d &&
+      bytes[index + 1] === 0x54 &&
+      bytes[index + 2] === 0x68 &&
+      bytes[index + 3] === 0x64
+    ) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function createMidiReader(buffer) {
@@ -1129,15 +1175,18 @@ function renderScoreStage(score) {
   const px = getSyncPixelsPerQuarter(score);
   const trackWidth = Math.max(720, Math.ceil(score.totalQuarters * px));
   const sheetWidth = SYNC_LABEL_WIDTH + trackWidth + 32;
+  const totalEvents = countScorePlayableEvents(score);
+  const compactMode = totalEvents > MAX_RENDERED_EVENTS_TOTAL;
   const visibleParts = getVisibleParts(score);
   const lanes = [
     renderRhythmLane(score, px, trackWidth),
-    ...visibleParts.map((part) => renderPartLane(part, score, px, trackWidth)),
+    ...visibleParts.map((part) => renderPartLane(part, score, px, trackWidth, compactMode)),
   ].join("");
 
   els.scoreStage.innerHTML = `
     <div class="score-cursor" id="scoreCursor" aria-hidden="true"></div>
     <div class="score-sheet" style="width:${sheetWidth}px">
+      ${compactMode ? '<div class="compact-notice">大型 MIDI 已使用紧凑谱面，播放和光标同步仍可用。</div>' : ""}
       ${lanes}
     </div>
   `;
@@ -1161,17 +1210,18 @@ function renderRhythmLane(score, px, trackWidth) {
   `;
 }
 
-function renderPartLane(part, score, px, trackWidth) {
-  const notes = part.events
-    .filter((event) => event.duration > 0)
-    .map((event, index) => renderScoreEvent(event, part, px, index))
-    .join("");
+function renderPartLane(part, score, px, trackWidth, compactMode = false) {
+  const playableEvents = part.events.filter((event) => event.duration > 0);
+  const useCompactLane = compactMode || playableEvents.length > MAX_RENDERED_EVENTS_PER_PART;
+  const notes = useCompactLane
+    ? renderCompactPartEvents(part, score, px)
+    : playableEvents.map((event, index) => renderScoreEvent(event, part, px, index)).join("");
 
   return `
     <div class="score-lane" data-lane-part="${escapeHtml(part.id)}" style="height:${SYNC_LANE_HEIGHT}px">
       <div class="lane-label">
         <strong>${escapeHtml(part.name)}</strong>
-        <span>${escapeHtml(part.analysis.voice)} · ${escapeHtml(part.analysis.range)}</span>
+        <span>${escapeHtml(part.analysis.voice)} · ${escapeHtml(part.analysis.range)}${useCompactLane ? " · 紧凑" : ""}</span>
       </div>
       <div class="notation-track staff-track" style="width:${trackWidth}px">
         ${renderStaffLines()}
@@ -1180,6 +1230,34 @@ function renderPartLane(part, score, px, trackWidth) {
       </div>
     </div>
   `;
+}
+
+function renderCompactPartEvents(part, score, px) {
+  const measureLength = getMeasureQuarterLength(score);
+  const byMeasure = new Map();
+  part.events
+    .filter((event) => !event.isRest && event.pitch && event.duration > 0)
+    .forEach((event) => {
+      const index = Math.floor(event.start / measureLength);
+      byMeasure.set(index, (byMeasure.get(index) || 0) + 1);
+    });
+
+  const maxDensity = Math.max(...byMeasure.values(), 1);
+  return Array.from(byMeasure.entries())
+    .map(([measureIndex, count]) => {
+      const left = Math.round(measureIndex * measureLength * px + 4);
+      const width = Math.max(12, Math.round(measureLength * px) - 8);
+      const height = Math.max(10, Math.round((count / maxDensity) * 42));
+      const top = 76 - height;
+      return `
+        <span
+          class="density-block"
+          style="left:${left}px; top:${top}px; width:${width}px; height:${height}px"
+          title="${escapeHtml(part.name)} 第 ${measureIndex + 1} 小节：${count} 个音符"
+        ></span>
+      `;
+    })
+    .join("");
 }
 
 function renderScoreEvent(event, part, px, index) {
@@ -1279,9 +1357,16 @@ function getVisibleParts(score) {
 
 function getSyncPixelsPerQuarter(score = state.score) {
   if (!score) return 64;
+  if (score.totalQuarters > 512) return 10;
+  if (score.totalQuarters > 256) return 16;
   if (score.totalQuarters > 96) return 34;
   if (score.totalQuarters > 48) return 44;
   return 64;
+}
+
+function countScorePlayableEvents(score) {
+  if (!score) return 0;
+  return score.parts.reduce((sum, part) => sum + countPlayableEvents(part.events), 0);
 }
 
 function getMeasureQuarterLength(score) {
@@ -1830,11 +1915,23 @@ els.fileDrop.addEventListener("drop", async (event) => {
 
 async function loadScoreFile(file) {
   const name = file.name.toLowerCase();
+  const type = (file.type || "").toLowerCase();
+  if (name.endsWith(".musicxml") || name.endsWith(".xml")) {
+    await loadXml(await file.text(), file.name);
+    return;
+  }
   if (name.endsWith(".pdf") || file.type === "application/pdf") {
     loadPdf(file);
     return;
   }
-  if (name.endsWith(".mid") || name.endsWith(".midi") || file.type.includes("midi")) {
+  if (
+    name.endsWith(".mid") ||
+    name.endsWith(".midi") ||
+    name.endsWith(".kar") ||
+    type.includes("midi") ||
+    type === "audio/mid" ||
+    type === "application/octet-stream"
+  ) {
     await loadMidi(await file.arrayBuffer(), file.name);
     return;
   }
