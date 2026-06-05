@@ -3,8 +3,12 @@ const state = {
   audioContext: null,
   nodes: [],
   playbackTimer: null,
+  playbackEndTimer: null,
   playbackStartedAt: 0,
   playbackSeconds: 0,
+  playbackQuarterSeconds: 0,
+  playbackMode: null,
+  playbackPartId: null,
 };
 
 const els = {
@@ -23,6 +27,12 @@ const els = {
   rhythmButton: document.querySelector("#rhythmButton"),
   stopButton: document.querySelector("#stopButton"),
   progressBar: document.querySelector("#progressBar"),
+  syncSubtitle: document.querySelector("#syncSubtitle"),
+  syncStatus: document.querySelector("#syncStatus"),
+  scoreStage: document.querySelector("#scoreStage"),
+  scoreCursor: document.querySelector("#scoreCursor"),
+  followCursorToggle: document.querySelector("#followCursorToggle"),
+  showAllPartsToggle: document.querySelector("#showAllPartsToggle"),
   analysisSubtitle: document.querySelector("#analysisSubtitle"),
   summaryChips: document.querySelector("#summaryChips"),
   partGrid: document.querySelector("#partGrid"),
@@ -40,6 +50,9 @@ const NOTE_CLASS = {
   A: 9,
   B: 11,
 };
+
+const SYNC_LABEL_WIDTH = 128;
+const SYNC_LANE_HEIGHT = 104;
 
 const FIFTHS_MAJOR = {
   "-7": "Cb major",
@@ -287,9 +300,11 @@ function parsePart(partElement, definition = {}) {
   let latestTime = { beats: 4, beatType: 4 };
   let latestTempo = null;
   const events = [];
+  const measureSpans = [];
   const measures = children(partElement, "measure");
 
   measures.forEach((measureElement, measureIndex) => {
+    const measureStart = currentQuarter;
     let cursor = currentQuarter;
     let maxCursor = currentQuarter;
     let lastNoteStart = cursor;
@@ -351,7 +366,14 @@ function parsePart(partElement, definition = {}) {
 
     const measuredLength = maxCursor - currentQuarter;
     const expectedLength = latestTime ? latestTime.beats * (4 / latestTime.beatType) : 0;
-    currentQuarter += measuredLength || expectedLength || 4;
+    const measureLength = measuredLength || expectedLength || 4;
+    currentQuarter += measureLength;
+    measureSpans.push({
+      number: measureNumber,
+      start: measureStart,
+      end: currentQuarter,
+      duration: measureLength,
+    });
   });
 
   return {
@@ -359,6 +381,7 @@ function parsePart(partElement, definition = {}) {
     name: definition.name || partElement.getAttribute("id") || "Part",
     abbreviation: definition.abbreviation || "",
     events,
+    measureSpans,
     key: latestKey,
     timeSignature: latestTime,
     tempo: latestTempo,
@@ -496,6 +519,10 @@ function render() {
   els.summaryChips.innerHTML = hasScore ? renderChips(score) : "";
   els.partGrid.innerHTML = hasScore ? renderPartCards(score) : renderEmptyState();
   els.insightStrip.innerHTML = hasScore ? renderInsights(score) : renderEmptyInsights();
+  els.syncSubtitle.textContent = hasScore
+    ? "播放声部、全部或节奏示范时，高亮光标会跟随曲谱时间线。"
+    : "导入曲谱后，示范音频和节奏练习会带动高亮光标。";
+  els.syncStatus.textContent = hasScore ? "谱面已同步" : "等待曲谱";
 
   els.partSelect.disabled = !hasScore;
   els.playPartButton.disabled = !hasScore;
@@ -515,6 +542,7 @@ function render() {
     els.partSelect.innerHTML = "<option>先导入曲谱</option>";
   }
 
+  renderScoreStage(score);
   updateTempoReadout();
 }
 
@@ -622,6 +650,193 @@ function renderEmptyInsights() {
   return "<div><strong>分析重点</strong><span>等待曲谱数据。</span></div>";
 }
 
+function renderScoreStage(score) {
+  if (!score) {
+    els.scoreStage.innerHTML = `
+      <div class="score-cursor" id="scoreCursor" aria-hidden="true"></div>
+      <div class="score-empty">
+        <strong>还没有同步谱面</strong>
+        <span>载入示例或导入 MusicXML 后可以边听边看高亮跟随。</span>
+      </div>
+    `;
+    els.scoreCursor = document.querySelector("#scoreCursor");
+    return;
+  }
+
+  const px = getSyncPixelsPerQuarter(score);
+  const trackWidth = Math.max(720, Math.ceil(score.totalQuarters * px));
+  const sheetWidth = SYNC_LABEL_WIDTH + trackWidth + 32;
+  const visibleParts = getVisibleParts(score);
+  const lanes = [
+    renderRhythmLane(score, px, trackWidth),
+    ...visibleParts.map((part) => renderPartLane(part, score, px, trackWidth)),
+  ].join("");
+
+  els.scoreStage.innerHTML = `
+    <div class="score-cursor" id="scoreCursor" aria-hidden="true"></div>
+    <div class="score-sheet" style="width:${sheetWidth}px">
+      ${lanes}
+    </div>
+  `;
+  els.scoreCursor = document.querySelector("#scoreCursor");
+  resetScoreCursor(false);
+}
+
+function renderRhythmLane(score, px, trackWidth) {
+  const beats = renderBeatMarkers(score, px);
+  return `
+    <div class="score-lane rhythm-lane" style="height:76px">
+      <div class="lane-label">
+        <strong>节奏</strong>
+        <span>${escapeHtml(score.timeSignature?.label || "beat")}</span>
+      </div>
+      <div class="notation-track" style="width:${trackWidth}px">
+        ${renderMeasureGrid(score, px)}
+        ${beats}
+      </div>
+    </div>
+  `;
+}
+
+function renderPartLane(part, score, px, trackWidth) {
+  const notes = part.events
+    .filter((event) => event.duration > 0)
+    .map((event, index) => renderScoreEvent(event, part, px, index))
+    .join("");
+
+  return `
+    <div class="score-lane" data-lane-part="${escapeHtml(part.id)}" style="height:${SYNC_LANE_HEIGHT}px">
+      <div class="lane-label">
+        <strong>${escapeHtml(part.name)}</strong>
+        <span>${escapeHtml(part.analysis.voice)} · ${escapeHtml(part.analysis.range)}</span>
+      </div>
+      <div class="notation-track staff-track" style="width:${trackWidth}px">
+        ${renderStaffLines()}
+        ${renderMeasureGrid(score, px)}
+        ${notes}
+      </div>
+    </div>
+  `;
+}
+
+function renderScoreEvent(event, part, px, index) {
+  const left = Math.round(event.start * px);
+  const width = Math.max(18, Math.round(event.duration * px) - 5);
+  const safePartId = escapeHtml(part.id);
+  const label = event.pitch ? event.pitch.label : "休";
+
+  if (event.isRest || !event.pitch) {
+    return `
+      <button
+        type="button"
+        class="score-note score-rest"
+        data-part-id="${safePartId}"
+        data-start="${event.start}"
+        data-end="${event.end}"
+        data-measure="${escapeHtml(event.measure)}"
+        style="left:${left}px; top:42px; width:${width}px"
+        title="${escapeHtml(part.name)} 第 ${escapeHtml(event.measure)} 小节 休止"
+      >休</button>
+    `;
+  }
+
+  const top = getNoteTop(event.pitch.midi, part.analysis.min, part.analysis.max);
+  return `
+    <button
+      type="button"
+      class="score-note"
+      data-part-id="${safePartId}"
+      data-start="${event.start}"
+      data-end="${event.end}"
+      data-measure="${escapeHtml(event.measure)}"
+      style="left:${left}px; top:${top}px; width:${width}px"
+      title="${escapeHtml(part.name)} 第 ${escapeHtml(event.measure)} 小节 ${escapeHtml(label)}"
+    >${escapeHtml(label)}</button>
+    <span
+      class="attack-dot"
+      data-part-id="${safePartId}"
+      data-start="${event.start}"
+      data-end="${event.end}"
+      style="left:${left}px"
+      aria-hidden="true"
+    ></span>
+  `;
+}
+
+function renderMeasureGrid(score, px) {
+  const measureLength = getMeasureQuarterLength(score);
+  const count = Math.max(score.measureCount, Math.ceil(score.totalQuarters / measureLength));
+  let html = "";
+
+  for (let index = 0; index <= count; index += 1) {
+    const left = Math.round(index * measureLength * px);
+    html += `<span class="measure-line" style="left:${left}px"></span>`;
+    if (index < count) {
+      html += `<span class="measure-label" style="left:${left + 6}px">${index + 1}</span>`;
+    }
+  }
+
+  return html;
+}
+
+function renderBeatMarkers(score, px) {
+  const beatQuarter = getBeatQuarterLength(score);
+  const measureLength = getMeasureQuarterLength(score);
+  const totalBeats = Math.ceil(score.totalQuarters / beatQuarter);
+  let html = "";
+
+  for (let beat = 0; beat <= totalBeats; beat += 1) {
+    const start = beat * beatQuarter;
+    const left = Math.round(start * px);
+    const isStrong = Math.abs(start % measureLength) < 0.001;
+    html += `
+      <span
+        class="beat-marker${isStrong ? " strong" : ""}"
+        data-start="${start}"
+        data-end="${start + beatQuarter}"
+        style="left:${left}px"
+        aria-hidden="true"
+      ></span>
+    `;
+  }
+
+  return html;
+}
+
+function renderStaffLines() {
+  return [22, 34, 46, 58, 70]
+    .map((top) => `<span class="staff-line" style="top:${top}px"></span>`)
+    .join("");
+}
+
+function getVisibleParts(score) {
+  if (els.showAllPartsToggle.checked) return score.parts;
+  return [getSelectedPart()];
+}
+
+function getSyncPixelsPerQuarter(score = state.score) {
+  if (!score) return 64;
+  if (score.totalQuarters > 96) return 34;
+  if (score.totalQuarters > 48) return 44;
+  return 64;
+}
+
+function getMeasureQuarterLength(score) {
+  const time = score?.timeSignature || { beats: 4, beatType: 4 };
+  return time.beats * (4 / time.beatType);
+}
+
+function getBeatQuarterLength(score) {
+  const time = score?.timeSignature || { beatType: 4 };
+  return 4 / time.beatType;
+}
+
+function getNoteTop(midi, min, max) {
+  if (min === null || max === null || min === max) return 42;
+  const ratio = (midi - min) / (max - min);
+  return Math.round(74 - ratio * 56);
+}
+
 function updateTempoReadout() {
   const speed = Number(els.speedSlider.value);
   els.speedOutput.textContent = `${speed}%`;
@@ -674,10 +889,10 @@ async function play(mode) {
   const quarterSeconds = 60 / bpm;
   const startAt = context.currentTime + 0.08;
   const durationSeconds = state.score.totalQuarters * quarterSeconds;
+  const selectedPart = getSelectedPart();
 
   if (mode === "part") {
-    const part = getSelectedPart();
-    schedulePart(context, master, part.events, startAt, quarterSeconds, 0.34, "triangle");
+    schedulePart(context, master, selectedPart.events, startAt, quarterSeconds, 0.34, "triangle");
   }
 
   if (mode === "all") {
@@ -689,16 +904,20 @@ async function play(mode) {
   }
 
   if (mode === "rhythm") {
-    const part = getSelectedPart();
     scheduleMetronome(context, master, startAt, quarterSeconds, state.score);
-    scheduleRhythmCues(context, master, part.events, startAt, quarterSeconds);
+    scheduleRhythmCues(context, master, selectedPart.events, startAt, quarterSeconds);
   }
 
   state.playbackStartedAt = startAt;
   state.playbackSeconds = durationSeconds;
+  state.playbackQuarterSeconds = quarterSeconds;
+  state.playbackMode = mode;
+  state.playbackPartId = mode === "all" ? null : selectedPart.id;
   els.stopButton.disabled = false;
+  updateSyncStatusForPlayback(mode, selectedPart);
+  updateScoreCursor(0);
   state.playbackTimer = window.setInterval(updateProgress, 80);
-  window.setTimeout(() => stopPlayback(), (durationSeconds + 0.5) * 1000);
+  state.playbackEndTimer = window.setTimeout(() => stopPlayback(), (durationSeconds + 0.5) * 1000);
 }
 
 function schedulePart(context, destination, events, startAt, quarterSeconds, level, type) {
@@ -778,6 +997,10 @@ function stopPlayback(resetProgress = true) {
     window.clearInterval(state.playbackTimer);
     state.playbackTimer = null;
   }
+  if (state.playbackEndTimer) {
+    window.clearTimeout(state.playbackEndTimer);
+    state.playbackEndTimer = null;
+  }
 
   state.nodes.forEach((node) => {
     try {
@@ -788,8 +1011,17 @@ function stopPlayback(resetProgress = true) {
     }
   });
   state.nodes = [];
+  state.playbackMode = null;
+  state.playbackPartId = null;
   els.stopButton.disabled = true;
-  if (resetProgress) els.progressBar.style.width = "0%";
+  clearScoreHighlights();
+  if (state.score) els.syncStatus.textContent = "谱面已同步";
+  if (resetProgress) {
+    els.progressBar.style.width = "0%";
+    resetScoreCursor();
+  } else if (els.scoreCursor) {
+    els.scoreCursor.classList.remove("is-playing");
+  }
 }
 
 function updateProgress() {
@@ -797,7 +1029,91 @@ function updateProgress() {
   const elapsed = state.audioContext.currentTime - state.playbackStartedAt;
   const progress = clamp((elapsed / state.playbackSeconds) * 100, 0, 100);
   els.progressBar.style.width = `${progress}%`;
+  updateScoreCursor(elapsed);
   if (progress >= 100) stopPlayback(false);
+}
+
+function updateSyncStatusForPlayback(mode, part) {
+  const labels = {
+    part: `${part.name} 声部示范同步中`,
+    all: "全声部示范同步中",
+    rhythm: `${part.name} 节奏示范同步中`,
+  };
+  els.syncStatus.textContent = labels[mode] || "同步中";
+}
+
+function updateScoreCursor(elapsedSeconds) {
+  if (!state.score || !els.scoreCursor) return;
+
+  const elapsed = Math.max(0, elapsedSeconds);
+  const quarter = state.playbackQuarterSeconds ? elapsed / state.playbackQuarterSeconds : 0;
+  const clampedQuarter = clamp(quarter, 0, state.score.totalQuarters);
+  const left = SYNC_LABEL_WIDTH + clampedQuarter * getSyncPixelsPerQuarter();
+
+  els.scoreCursor.style.left = `${left}px`;
+  els.scoreCursor.classList.add("is-playing");
+  updateActiveScoreMarks(clampedQuarter);
+
+  if (els.followCursorToggle.checked) {
+    const stageRect = els.scoreStage.getBoundingClientRect();
+    const cursorScreenX = left - els.scoreStage.scrollLeft;
+    const targetLeft = Math.max(0, left - stageRect.width * 0.42);
+    if (cursorScreenX < stageRect.width * 0.18 || cursorScreenX > stageRect.width * 0.72) {
+      els.scoreStage.scrollTo({ left: targetLeft, behavior: "smooth" });
+    }
+  }
+}
+
+function updateActiveScoreMarks(currentQuarter) {
+  clearScoreHighlights();
+
+  const activePartId = state.playbackPartId;
+  const playableNotes = Array.from(els.scoreStage.querySelectorAll(".score-note"));
+  playableNotes.forEach((note) => {
+    const start = Number(note.dataset.start);
+    const end = Number(note.dataset.end);
+    const partMatches = !activePartId || note.dataset.partId === activePartId;
+    if (partMatches && currentQuarter >= start && currentQuarter < end) {
+      note.classList.add("is-active");
+      const lane = note.closest(".score-lane");
+      lane?.classList.add("is-current");
+    }
+  });
+
+  const attacks = Array.from(els.scoreStage.querySelectorAll(".attack-dot"));
+  attacks.forEach((dot) => {
+    const start = Number(dot.dataset.start);
+    const end = Number(dot.dataset.end);
+    const partMatches = !activePartId || dot.dataset.partId === activePartId;
+    if (partMatches && currentQuarter >= start && currentQuarter < end) {
+      dot.classList.add("is-active");
+    }
+  });
+
+  const beats = Array.from(els.scoreStage.querySelectorAll(".beat-marker"));
+  beats.forEach((beat) => {
+    const start = Number(beat.dataset.start);
+    const end = Number(beat.dataset.end);
+    if (currentQuarter >= start && currentQuarter < end) {
+      beat.classList.add("is-active");
+    }
+  });
+}
+
+function clearScoreHighlights() {
+  if (!els.scoreStage) return;
+  els.scoreStage
+    .querySelectorAll(".is-active, .is-current")
+    .forEach((item) => item.classList.remove("is-active", "is-current"));
+}
+
+function resetScoreCursor(resetScroll = true) {
+  if (!els.scoreCursor) return;
+  els.scoreCursor.style.left = `${SYNC_LABEL_WIDTH}px`;
+  els.scoreCursor.classList.remove("is-playing");
+  if (resetScroll && els.scoreStage) {
+    els.scoreStage.scrollTo({ left: 0 });
+  }
 }
 
 function getSelectedPart() {
@@ -852,6 +1168,35 @@ els.clearButton.addEventListener("click", () => {
 });
 
 els.speedSlider.addEventListener("input", updateTempoReadout);
+els.partSelect.addEventListener("change", () => {
+  stopPlayback();
+  renderScoreStage(state.score);
+  if (state.score) {
+    els.syncStatus.textContent = `${getSelectedPart().name} 已选中`;
+  }
+});
+els.showAllPartsToggle.addEventListener("change", () => {
+  stopPlayback();
+  renderScoreStage(state.score);
+});
+els.followCursorToggle.addEventListener("change", () => {
+  if (els.followCursorToggle.checked && els.scoreCursor) {
+    els.scoreStage.scrollTo({ left: Math.max(0, els.scoreCursor.offsetLeft - els.scoreStage.clientWidth * 0.42) });
+  }
+});
+els.scoreStage.addEventListener("click", (event) => {
+  const note = event.target.closest(".score-note");
+  if (!state.score || !note) return;
+
+  const part = state.score.parts.find((item) => item.id === note.dataset.partId);
+  if (!part) return;
+
+  els.partSelect.value = part.id;
+  if (!els.showAllPartsToggle.checked) {
+    renderScoreStage(state.score);
+  }
+  els.syncStatus.textContent = `${part.name} 已选中`;
+});
 els.playPartButton.addEventListener("click", () => play("part"));
 els.playAllButton.addEventListener("click", () => play("all"));
 els.rhythmButton.addEventListener("click", () => play("rhythm"));
