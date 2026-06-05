@@ -6,6 +6,7 @@ A lightweight choir rehearsal app for score analysis, part-by-part audio demos, 
 
 - Import a MusicXML score (`.musicxml` or `.xml`)
 - Import MIDI scores (`.mid` or `.midi`)
+- Import karaoke MIDI files (`.kar`)
 - Preview PDF scores (`.pdf`) in the app
 - Analyze title, key, time signature, tempo, parts, ranges, and likely voice types
 - Render an in-app practice score with measures, pitch labels, rests, and rhythm markers
@@ -13,6 +14,7 @@ A lightweight choir rehearsal app for score analysis, part-by-part audio demos, 
 - Use a lightweight built-in choir-style Ah synth for generated demos
 - Practice rhythm with click and note-attack cues
 - Sync audio and rhythm demos with a highlighted score cursor
+- Use compact score rendering automatically for large MIDI files
 - Bind an MP3/WAV demo recording to a selected part and play it with the score cursor
 - Adjust playback speed in the browser
 - Export the loaded score as MIDI
