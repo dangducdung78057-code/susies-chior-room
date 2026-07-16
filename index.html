@@ -3,194 +3,248 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Susie's Choir Room</title>
+    <title>StageOS 艺演助手 v1</title>
+    <meta
+      name="description"
+      content="StageOS 艺演助手 v1 产品总览站，集中展示技术栈、页面结构、核心接口、部署方式与已实现范围。"
+    >
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <div class="app-shell">
-      <header class="topbar">
-        <div class="brand">
-          <img src="assets/choir-room.svg" alt="" class="brand-art">
-          <div>
-            <h1>Susie's Choir Room</h1>
-            <p>合唱练习工作台</p>
+    <div class="page-shell">
+      <header class="hero">
+        <nav class="topbar" aria-label="页面导航">
+          <a class="brand" href="#top">StageOS 艺演助手</a>
+          <div class="nav-links">
+            <a href="#pages">页面结构</a>
+            <a href="#apis">核心接口</a>
+            <a href="#deploy">部署方式</a>
+            <a href="#scope">落地范围</a>
+          </div>
+        </nav>
+
+        <div class="hero-panel" id="top">
+          <p class="eyebrow">StageOS 全栈产品蓝图 v1</p>
+          <h1>公开展示站 + 工作台 + 预览导出的一体化艺演助手</h1>
+          <p class="hero-copy">
+            本站整理 StageOS 艺演助手的产品定位、页面结构、接口设计、运行方式与功能边界，
+            用于演示项目范围并支撑后续工程落地。
+          </p>
+
+          <div class="chip-row" aria-label="技术栈概览">
+            <span>Next.js App Router + TypeScript</span>
+            <span>PostgreSQL + Prisma ORM</span>
+            <span>JWT Cookie 登录注册</span>
+            <span>2D / 3D / 插画 / 写实预览</span>
           </div>
         </div>
-        <div class="score-status" id="scoreStatus">未载入曲谱</div>
       </header>
 
-      <main class="workspace">
-        <section class="panel score-panel" aria-labelledby="scoreHeading">
-          <div class="panel-heading">
-            <h2 id="scoreHeading">曲谱</h2>
-          </div>
+      <main class="content">
+        <section class="section-grid">
+          <article class="card">
+            <h2>核心能力</h2>
+            <ul class="bullet-list">
+              <li>艺案集案例展示与一键同款工作台</li>
+              <li>素材上传、数据库存储、方案生成与 Negative Guard 审查</li>
+              <li>2D 数字人、3D 交互预览、插画风与写实风提示词输出</li>
+              <li>项目 JSON 导出与后续第三方服务扩展位保留</li>
+            </ul>
+          </article>
 
-          <label class="file-drop" for="scoreInput" id="fileDrop">
-            <span class="file-icon" aria-hidden="true">♪</span>
-            <span>
-              <strong>导入曲谱</strong>
-              <small>.musicxml / .xml / .mid / .midi / .kar / .pdf</small>
-            </span>
-          </label>
-          <input id="scoreInput" type="file" accept=".musicxml,.xml,.mid,.midi,.kar,.pdf,text/xml,application/xml,application/pdf,audio/midi,audio/mid,audio/x-midi,application/x-midi,application/octet-stream">
-
-          <div class="button-row">
-            <button type="button" class="button primary" id="demoButton">
-              <span aria-hidden="true">▶</span>
-              载入示例
-            </button>
-            <button type="button" class="button ghost" id="clearButton">
-              <span aria-hidden="true">×</span>
-              清空
-            </button>
-            <button type="button" class="button ghost" id="exportMidiButton" disabled>
-              <span aria-hidden="true">↓</span>
-              导出 MIDI
-            </button>
-          </div>
-
-          <dl class="meta-list" id="scoreMeta">
-            <div>
-              <dt>标题</dt>
-              <dd>等待曲谱</dd>
-            </div>
-            <div>
-              <dt>调号</dt>
-              <dd>--</dd>
-            </div>
-            <div>
-              <dt>拍号</dt>
-              <dd>--</dd>
-            </div>
-            <div>
-              <dt>速度</dt>
-              <dd>--</dd>
-            </div>
-          </dl>
+          <article class="card">
+            <h2>技术栈</h2>
+            <ul class="bullet-list">
+              <li>Next.js App Router + TypeScript</li>
+              <li>PostgreSQL + Prisma ORM</li>
+              <li>自研 JWT Cookie 登录注册</li>
+              <li>本地文件上传存储，可替换对象存储</li>
+              <li>React Three Fiber / three.js 3D 预览</li>
+              <li>Zod 输入校验，支持可选 OpenAI Responses API 文本增强</li>
+            </ul>
+          </article>
         </section>
 
-        <section class="panel player-panel" aria-labelledby="practiceHeading">
-          <div class="panel-heading">
-            <h2 id="practiceHeading">练习</h2>
+        <section class="card" id="pages">
+          <div class="section-heading">
+            <p class="eyebrow">页面结构</p>
+            <h2>从展示站到工作台的完整路由规划</h2>
           </div>
 
-          <label class="field">
-            <span>声部</span>
-            <select id="partSelect" disabled>
-              <option>先导入曲谱</option>
-            </select>
-          </label>
-
-          <label class="field">
-            <span>速度</span>
-            <div class="speed-control">
-              <input id="speedSlider" type="range" min="50" max="150" value="100">
-              <output id="speedOutput">100%</output>
-            </div>
-          </label>
-
-          <div class="tempo-readout">
-            当前速度
-            <strong id="currentBpm">-- BPM</strong>
-          </div>
-
-          <div class="transport-grid">
-            <button type="button" class="button primary" id="playPartButton" disabled>
-              <span aria-hidden="true">▶</span>
-              声部
-            </button>
-            <button type="button" class="button primary" id="playAllButton" disabled>
-              <span aria-hidden="true">▶</span>
-              全部
-            </button>
-            <button type="button" class="button accent" id="rhythmButton" disabled>
-              <span aria-hidden="true">●</span>
-              节奏
-            </button>
-            <button type="button" class="button accent" id="playAudioButton" disabled>
-              <span aria-hidden="true">▶</span>
-              音频
-            </button>
-            <button type="button" class="button danger" id="stopButton" disabled>
-              <span aria-hidden="true">■</span>
-              停止
-            </button>
-          </div>
-
-          <div class="progress-shell" aria-label="播放进度">
-            <div class="progress-bar" id="progressBar"></div>
-          </div>
-
-          <label class="field">
-            <span>示范音频</span>
-            <input id="demoAudioInput" class="audio-input" type="file" accept="audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/mp4" disabled>
-          </label>
-          <div class="audio-status" id="audioStatus">先导入 MusicXML 或 MIDI，再给当前声部绑定 MP3/WAV。</div>
-        </section>
-
-        <section class="score-sync-panel" aria-labelledby="syncHeading">
-          <div class="sync-header">
-            <div>
-              <h2 id="syncHeading">同步曲谱</h2>
-              <p id="syncSubtitle">导入曲谱后，示范音频和节奏练习会带动高亮光标。</p>
-            </div>
-            <div class="sync-status" id="syncStatus">等待曲谱</div>
-          </div>
-
-          <div class="sync-toolbar" aria-label="同步曲谱设置">
-            <label class="toggle">
-              <input type="checkbox" id="followCursorToggle" checked>
-              <span>跟随光标</span>
-            </label>
-            <label class="toggle">
-              <input type="checkbox" id="showAllPartsToggle" checked>
-              <span>显示全部声部</span>
-            </label>
-          </div>
-
-          <div class="score-stage" id="scoreStage">
-            <div class="score-cursor" id="scoreCursor" aria-hidden="true"></div>
-            <div class="score-empty">
-              <strong>还没有同步谱面</strong>
-              <span>载入示例或导入 MusicXML 后可以边听边看高亮跟随。</span>
-            </div>
-          </div>
-        </section>
-
-        <section class="analysis-panel" aria-labelledby="analysisHeading">
-          <div class="analysis-header">
-            <div>
-              <h2 id="analysisHeading">曲谱分析</h2>
-              <p id="analysisSubtitle">导入曲谱后生成声部、音域和节奏线索。</p>
-            </div>
-            <div class="summary-chips" id="summaryChips"></div>
-          </div>
-
-          <div class="part-grid" id="partGrid">
-            <article class="empty-state">
-              <strong>还没有曲谱</strong>
-              <span>载入示例或导入 MusicXML 后开始分析。</span>
+          <div class="route-grid">
+            <article>
+              <code>/</code>
+              <p>首页</p>
+            </article>
+            <article>
+              <code>/museum</code>
+              <p>艺演展馆</p>
+            </article>
+            <article>
+              <code>/cases</code>
+              <p>艺案集</p>
+            </article>
+            <article>
+              <code>/cases/:id</code>
+              <p>成案详情</p>
+            </article>
+            <article>
+              <code>/about</code>
+              <p>关于我们</p>
+            </article>
+            <article>
+              <code>/favorites</code>
+              <p>我的收藏</p>
+            </article>
+            <article>
+              <code>/workspace</code>
+              <p>StageOS 工作台</p>
+            </article>
+            <article>
+              <code>/workspace/clone/:caseId</code>
+              <p>一键同款工作台</p>
+            </article>
+            <article>
+              <code>/workspace/preview/:projectId</code>
+              <p>2D / 3D / 插画 / 写实 / 导出预览页</p>
             </article>
           </div>
+        </section>
 
-          <div class="insight-strip" id="insightStrip">
-            <div>
-              <strong>分析重点</strong>
-              <span>等待曲谱数据。</span>
-            </div>
+        <section class="card" id="apis">
+          <div class="section-heading">
+            <p class="eyebrow">核心接口</p>
+            <h2>覆盖认证、案例、收藏、项目、上传与 StageOS 生成链路</h2>
+          </div>
+
+          <div class="api-grid">
+            <article>
+              <h3>认证与健康检查</h3>
+              <pre><code>GET  /api/health
+POST /api/auth/register
+POST /api/auth/login
+POST /api/auth/logout
+GET  /api/auth/me</code></pre>
+            </article>
+            <article>
+              <h3>案例与收藏</h3>
+              <pre><code>GET    /api/cases
+GET    /api/cases/:id
+GET    /api/favorites
+POST   /api/favorites
+DELETE /api/favorites</code></pre>
+            </article>
+            <article>
+              <h3>项目与上传</h3>
+              <pre><code>GET   /api/projects
+POST  /api/projects
+GET   /api/projects/:id
+PATCH /api/projects/:id
+POST  /api/uploads</code></pre>
+            </article>
+            <article>
+              <h3>StageOS 生成与预览</h3>
+              <pre><code>POST /api/stageos/cases/:caseId/clone-context
+POST /api/stageos/generate-plan
+POST /api/stageos/render-context
+POST /api/stageos/render-preview
+GET  /api/previews/:id/svg</code></pre>
+            </article>
           </div>
         </section>
 
-        <aside class="panel notes-panel" aria-labelledby="notesHeading">
-          <div class="panel-heading">
-            <h2 id="notesHeading">练习笔记</h2>
+        <section class="section-grid" id="deploy">
+          <article class="card">
+            <div class="section-heading">
+              <p class="eyebrow">本地运行</p>
+              <h2>目标工程启动流程</h2>
+            </div>
+            <pre><code>cp .env.example .env
+npm install
+npx prisma generate
+npx prisma migrate dev
+npm run db:seed
+npm run dev</code></pre>
+            <p class="subtle">默认种子账号：<strong>admin@stageos.local</strong> / <strong>StageOS123!</strong></p>
+          </article>
+
+          <article class="card">
+            <div class="section-heading">
+              <p class="eyebrow">Docker 部署</p>
+              <h2>容器化交付路径</h2>
+            </div>
+            <pre><code>cp .env.example .env
+docker compose up --build
+
+docker compose exec app npx prisma migrate deploy
+docker compose exec app npm run db:seed</code></pre>
+            <p class="subtle">首次启动后完成迁移与种子，再访问 <strong>http://localhost:3000</strong>。</p>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="card">
+            <div class="section-heading">
+              <p class="eyebrow">生产部署注意</p>
+              <h2>上线前必须确认</h2>
+            </div>
+            <ol class="ordered-list">
+              <li>修改 <code>AUTH_SECRET</code>。</li>
+              <li>多实例部署时将本地上传目录替换为对象存储。</li>
+              <li>如需 OpenAI 文本增强，配置 <code>AI_PROVIDER</code>、<code>OPENAI_API_KEY</code> 与 <code>OPENAI_TEXT_MODEL</code>。</li>
+              <li>插画/写实模式目前输出受约束提示词，可继续对接外部图像服务。</li>
+            </ol>
+          </article>
+
+          <article class="card">
+            <div class="section-heading">
+              <p class="eyebrow">内置资料</p>
+              <h2>已封入的 StageOS 内容</h2>
+            </div>
+            <ul class="bullet-list">
+              <li>语言类节目研究报告</li>
+              <li>群体朗诵按学段分析</li>
+              <li>啦啦操视觉分析</li>
+              <li>群舞反面案例 / 避坑硬约束</li>
+              <li>StageOS 总控封版文件</li>
+              <li>新增资料提示词契约 v2</li>
+              <li>Negative Guard 提示词契约 v1</li>
+            </ul>
+          </article>
+        </section>
+
+        <section class="card" id="scope">
+          <div class="section-heading">
+            <p class="eyebrow">真实落地范围</p>
+            <h2>已实现能力与预留扩展位</h2>
           </div>
-          <textarea id="practiceNotes" rows="10" spellcheck="false" placeholder="记录声部难点、排练提醒、速度目标。"></textarea>
-          <div class="notes-status" id="notesStatus">本地保存</div>
-        </aside>
+
+          <div class="scope-grid">
+            <article>
+              <h3>已实现</h3>
+              <ul class="bullet-list">
+                <li>用户注册 / 登录 / 退出</li>
+                <li>案例、收藏、项目、素材、预览的数据存储</li>
+                <li>工作台分步填写、上传素材与方案生成</li>
+                <li>Negative Guard 风险审查</li>
+                <li>2D 数字人 SVG 预览与 3D 交互预览</li>
+                <li>插画风 / 写实风受约束提示词</li>
+                <li>项目 JSON 导出</li>
+              </ul>
+            </article>
+            <article>
+              <h3>未默认启用</h3>
+              <ul class="bullet-list">
+                <li>外部图像生成服务</li>
+                <li>短视频生成服务</li>
+                <li>第三方支付</li>
+                <li>短信登录</li>
+                <li>多人协作权限系统</li>
+              </ul>
+            </article>
+          </div>
+        </section>
       </main>
     </div>
-
-    <script src="app.js"></script>
   </body>
 </html>
