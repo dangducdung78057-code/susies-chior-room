@@ -15,7 +15,7 @@
 
 ## 本地预览
 
-直接打开 `/home/runner/work/susies-chior-room/susies-chior-room/index.html`，或使用任意静态文件服务器托管仓库根目录。
+直接在仓库根目录打开 `index.html`，或使用任意静态文件服务器托管仓库根目录。
 
 ## 页面结构
 
